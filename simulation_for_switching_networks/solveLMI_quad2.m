@@ -1,0 +1,228 @@
+%%%%%%%%%
+%製作者：加茂脩麻
+%%%%%%%%%
+%%
+clear all;
+addpath(genpath("C:\yalmip\YALMIP-master"))
+addpath(genpath("C:\SeDuMi-master\sedumi-master"))
+addpath(genpath("C:\SDPT3-4.0\sdpt3-master"))
+addpath(genpath("C:\Program Files\mosek"))
+yalmip('clear')
+
+eps = 1e-9;
+
+%% system condition
+n=3;
+
+%% Chua parameter from a gallery of Chua attractors
+%{
+al=9;
+be=14;
+ga=0.01;
+k=1;
+
+A = k*[-al   al    0;
+       1     -1    1;
+       0    -be   -ga];
+% A=zeros(n);
+ 
+
+%nonlinear part (2024/1/12parameterの符号を直した)
+a=-1.14;
+b=-0.714;
+
+% f=-[k*al*(b*x(1)+1/2*(a-b)*(abs(x(1)+1)-abs(x(1)-1)));
+%     0;
+%     0];
+%}
+
+%% Chua parameter2
+% {
+    al=9;
+    be=14.28;
+    ga=0;
+    k=1;
+    a=-1/7;%m0
+    b=2/7;%m1
+    A = k*[-al*b   al    0;
+            1     -1    1;
+            0    -be   -ga];
+
+%}
+
+%% quad condition
+% QUAD(0,om)だから左辺の第二項が消える
+%(v-w)^t * P *[f(v)-f(w)]<=-om * (v-w)^t *(v-w)
+
+% p=10;
+% P=p*eye(n);
+% om=p*(a*al-1/2*max(eig(A+A')) );
+
+
+%% other system parameters
+B=eye(n);
+C=eye(n);
+BC=B*C;
+N=3; %sum of systems
+T=0.00001;%max off dwell time
+
+%% LMI settings
+EpsN=eps*eye(n);
+Eps = 1e-6;%ここはLMIの結果にほぼ影響しない
+EpsN2= eps*eye(n*2);
+EpsN3= eps*eye(n*3);
+EpsN4= eps*eye(n*4);
+EpsN5= eps*eye(n*5);
+z=zeros(n,n);
+%1,i間の結合がオンのときの最小の結合数
+l_st=1;
+%1,i間の結合がオフのときの最小の結合数
+l_us=0;
+
+%% LMIloop
+parameter_list=[];
+lam_as_list=100:100:1000;
+gap_list=[10 100];
+p_list=[0.01];
+
+for gap_i=size(gap_list,2)
+    gap=gap_list(gap_i);
+for lam_i=1:size(lam_as_list,2)
+    lambda_ast=lam_as_list(lam_i);
+
+for p_i=1:size(p_list,2)
+p=p_list(p_i);
+P=p*eye(n);
+om=p*( a*al-1/2*max(eig(A+A')) );
+%      A=zeros(n);
+
+LMI=[];
+k=sdpvar(1);
+alpha0=sdpvar(1);
+alpha1=sdpvar(1);
+eta=sdpvar(1);
+LMI=[LMI,k>=eps,alpha0>=lambda_ast+gap,alpha1>=eps,eta>=eps];
+
+%{
+k=1000;
+T=0.00001;
+alpha0=2550;
+alpha1=1450;
+lambda_ast=1450;
+eta=700;
+Eps = 1e-6;
+%}
+%% LMI
+
+Phi0=(A-k*(l_st+1)*BC).'*P + P*(A-k*(l_st+1)*BC) -2*om*eye(n);
+Phi1=(A-k*l_us*BC).'*P + P*(A-k*l_us*BC) -2*om*eye(n);
+
+
+%N=3   
+% {
+const_st = [Phi0+alpha0*P    k*P*BC  ;
+                   k*BC.'*P          -eta*P      ];
+
+const_us = [Phi1-alpha1*P    k*P*BC  ;
+                   k*BC.'*P          -eta*P     ];
+
+LMI=[LMI, const_st <= -EpsN2];
+LMI=[LMI, const_us<=-EpsN2];
+%}
+
+%N=4
+%{
+const_st = [Phi0+alpha0*P    k*BC*P                k*BC*P       ;
+               k*BC.'*P               -eta*P                       z            ; 
+               k*BC.'*P                  z                             -eta*P   ];
+
+const_us = [Phi1-alpha1*P    k*BC*P        k*BC*P           ;
+               k*BC.'*P          -eta*P                      z             ; 
+               k*BC.'*P               z                  -eta*P            ];
+
+LMI=[LMI, const_st <= -EpsN3];
+LMI=[LMI, const_us<=-EpsN3];
+%}
+
+%N=5
+%{
+const_st = [Phi0+alpha0*P    k*BC*P      k*BC*P     k*BC*P           P;
+               k*BC.'*P          -eta*P                   z                     z                     z; 
+               k*BC.'*P               z                  -eta*P                 z                    z; 
+               k*BC.'*P               z                     z                   -eta*P               z;
+               P                            z                     z                     z                 -Eps*eye(n)];
+
+const_us = [Phi1-alpha1*P    k*BC*P      k*BC*P     k*BC*P           P;
+               k*BC.'*P          -eta*P                   z                     z                     z; 
+               k*BC.'*P               z                  -eta*P                 z                    z; 
+               k*BC.'*P               z                     z                   -eta*P               z;
+               P                            z                     z                     z                 -Eps*eye(n)];
+LMI=[LMI, const_st <= -EpsN5];
+LMI=[LMI, const_us<=-EpsN5];
+%}
+
+
+%% solveLMI
+
+ops=sdpsettings('verbose',0);
+sol=optimize(LMI,eta/lambda_ast,ops);
+disp(sol.problem);
+
+%% check LMI
+%%%%% LMIの値代入%%%%%%%%
+k=value(k);
+alpha0=value(alpha0);
+alpha1=value(alpha1);
+eta=value(eta);
+
+const_st=value(const_st);
+check_st=max(eig(const_st));
+const_us=value(const_us);
+check_us=max(eig(const_us));
+
+a1=min(eig(P));
+a2=max(eig(P));
+a2a1=a2/a1;
+
+rate=(alpha1+lambda_ast)/(alpha0-lambda_ast);
+c=(alpha1+lambda_ast)*T;
+
+gamma=sqrt((2*(N-2)*eta*a2*exp(c))/(a1*lambda_ast));
+
+tmp1=sprintf('sol= %d',sol.problem);
+tmp2=sprintf('gamma= %d',gamma);
+tmp3=sprintf('rate= %d',rate);
+tmp4=sprintf('T= %d',T);
+
+disp(tmp1);
+disp(tmp2);
+disp(tmp3);
+disp(tmp4);
+
+if sol.problem==0 && gamma<1
+    disp('OK');
+end
+
+if sol.problem==0 && gamma<1 && check_st<0 && check_us<0 
+    disp('LMI OK');
+    parameter=[k;alpha0;alpha1;eta;lambda_ast;rate;gamma;gap;p];
+    parameter_list=[parameter_list parameter];
+end
+
+% for save
+%{
+progfile=pwd;
+datenow = datestr(now,'yyyy-mm-dd-HH-MM');
+mkdir('lmi_results',datenow)
+cd(strcat('lmi_results/',datenow))
+savefile = [sprintf('k%d-',k),sprintf('rate%d-',rate),sprintf('ADT%d-',ADT),datenow,'.mat'];
+save(savefile)
+cd(progfile)
+%}
+
+end
+end
+end
+
+[minrate index]=min(parameter_list(6,:))
+
